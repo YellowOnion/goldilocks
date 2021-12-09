@@ -8,5 +8,6 @@ mkShell {
     rustc
     rls
     rust-analyzer
+    carla
   ];
 }

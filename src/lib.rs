@@ -31,6 +31,8 @@ impl Plugin for Denoise {
     //fn activate(&mut self) {
     //}
 
+    fn activate(&mut self) { }
+
     fn run<'a>(&mut self, sample_count: usize, ports: &[&'a PortConnection<'a>]) {
         let mut  input  = vec![ports[0].unwrap_audio().to_vec(), ports[1].unwrap_audio().to_vec()];
         let mut  output = vec![ports[2].unwrap_audio_mut(), ports[3].unwrap_audio_mut()];
@@ -45,15 +47,47 @@ impl Plugin for Denoise {
         let irfft = self.planner.plan_fft_inverse(LENGTH);
 
         let s = 1.0/(LENGTH as f32);
+ /*
+        let (window_range, roll_range):
+               (Box<Fn(usize) -> Range<usize>>,
+                Box<Fn(usize) -> Range<usize>>) = (if sample_count > LENGTH {
+            (Box::new(|n: usize| n*LENGTH .. (n+1)*LENGTH),
+             Box::new(|n: usize| 0..LENGTH))
+        }
+        else if LENGTH == sample_count {
+            (Box::new(|n: usize| 0..LENGTH),
+             Box::new(|n: usize| 0..LENGTH))
+        }
+        else {
+            (Box::new(|n: usize | n*sample_count .. (n+1) * sample_count),
+             Box::new(|n: usize | sample_count .. LENGTH))
+        }); */
 
         let step = sample_count.min(LENGTH);
 
         for (j, chan) in c_out.iter_mut().enumerate() {
 
-            for n in 0..(LENGTH/step) {
-                self.input_buf[j] = self.input_buf[j][step..LENGTH].to_vec();
-                assert_eq!(self.input_buf[j].len(), LENGTH-step);
-                self.input_buf[j].append(&mut input[j][n*step..(n+1)*step].to_vec());
+            for n in 0..(if sample_count > LENGTH {sample_count/LENGTH} else {1}) {
+
+                let (window_range, roll_range, left_overs) = if sample_count > LENGTH {
+                    (n*LENGTH .. (n+1)*LENGTH,
+                    LENGTH ..LENGTH,
+
+                    0)
+                } else if LENGTH == sample_count {
+                    (0..LENGTH,
+                     LENGTH..LENGTH,
+                     0)
+                } else {
+                    (n*sample_count .. (n+1) * sample_count,
+                     sample_count .. LENGTH,
+                     LENGTH-step)
+                };
+                println!("n = {}", n);
+                assert_eq!(self.input_buf[j].len(), LENGTH);
+                self.input_buf[j] = self.input_buf[j][roll_range].to_vec();
+                assert_eq!(self.input_buf[j].len(), left_overs);
+                self.input_buf[j].append(&mut input[j][window_range.clone()].to_vec());
                 assert_eq!(self.input_buf[j].len(), LENGTH);
 
                 //
@@ -64,15 +98,17 @@ impl Plugin for Denoise {
                     let (mut mag, phase) = sample.to_polar();
                     if learn { self.buf[i] *= mag * 1.0/learn_time; }
                     if mag < noise_floor {mag = 0.0}
-                    //*sample = Complex32::from_polar(mag, phase);
+                    *sample = Complex32::from_polar(mag, phase);
                 }
                 irfft.process(chan, &mut output_r[j]).unwrap();
-
-                output[j][n*step..(n+1)*step].copy_from_slice(&output_r[j]);
-                //assert_eq!(&output_r)
+                let output_slice = &output_r[j][LENGTH-step..LENGTH];
+                assert_eq!(output_slice.len(), step);
+                output[j][window_range.clone()].copy_from_slice(output_slice);
             }
         }
     }
+
+    fn deactivate(&mut self) { }
 }
 
 #[no_mangle]
